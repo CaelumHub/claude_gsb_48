@@ -12,8 +12,7 @@ import time
 from . import crypto, pow as pow_mod
 from .block import Block
 from .blockchain import Blockchain
-from .config import (COINBASE_REWARD, CONTRACT_EVENT_DEDUP_KEY,
-                     MAX_TX_PER_BLOCK, MINING_INTERVAL)
+from .config import COINBASE_REWARD, MAX_TX_PER_BLOCK, MINING_INTERVAL
 from .p2p import PeerRegistry, dial_peer, http_get_json, http_post_json
 from .state import ZERO_ADDRESS
 from .storage import DataPaths, atomic_write_json, read_json
@@ -272,12 +271,25 @@ class Node:
                 data.setdefault("events", []).append({
                     "height": height, "txid": r.get("txid"),
                     "event": e.get("event"), "data": e.get("data"),
+                    "seq": e.get("seq"),
                 })
             data["events"] = data["events"][-2000:]
-            dedup = {}
-            for entry in data["events"]:
-                dedup[entry.get(CONTRACT_EVENT_DEDUP_KEY)] = entry
-            data["events"] = list(dedup.values())
+
+            # Events are occurrence logs, not unique-by-name records.  Multiple
+            # transactions (and multiple emits in one transaction) can use the
+            # same event name.  De-duplicate only an exact re-delivery of the
+            # same event occurrence.
+            unique_events = {}
+            for index, entry in enumerate(data["events"]):
+                seq = entry.get("seq")
+                if seq is None:
+                    # Records written before seq was persisted do not have a
+                    # stable per-transaction occurrence id; retain their order.
+                    key = ("legacy", index)
+                else:
+                    key = (entry.get("height"), entry.get("txid"), seq)
+                unique_events[key] = entry
+            data["events"] = list(unique_events.values())
             atomic_write_json(path, data)
 
     def sync_contract_files(self):

@@ -12,8 +12,7 @@ import time
 from . import crypto, pow as pow_mod
 from .block import Block
 from .blockchain import Blockchain
-from .config import (COINBASE_REWARD, CONTRACT_EVENT_DEDUP_KEY,
-                     MAX_TX_PER_BLOCK, MINING_INTERVAL)
+from .config import COINBASE_REWARD, MAX_TX_PER_BLOCK, MINING_INTERVAL
 from .p2p import PeerRegistry, dial_peer, http_get_json, http_post_json
 from .state import ZERO_ADDRESS
 from .storage import DataPaths, atomic_write_json, read_json
@@ -272,11 +271,18 @@ class Node:
                 data.setdefault("events", []).append({
                     "height": height, "txid": r.get("txid"),
                     "event": e.get("event"), "data": e.get("data"),
+                    "seq": e.get("seq"),
                 })
             data["events"] = data["events"][-2000:]
+            # Events are distinct log entries: repeated calls (or repeated
+            # emits within one call) legitimately share the same event name.
+            # Only collapse exact duplicates of one emission, identified by
+            # its block, transaction and per-call sequence number.
             dedup = {}
             for entry in data["events"]:
-                dedup[entry.get(CONTRACT_EVENT_DEDUP_KEY)] = entry
+                key = (entry.get("height"), entry.get("txid"),
+                       entry.get("seq"))
+                dedup[key] = entry
             data["events"] = list(dedup.values())
             atomic_write_json(path, data)
 
